@@ -3,17 +3,13 @@ import chromadb
 
 from app.ingestion.formatter import Document
 from app.retrieval.embeddings import get_embedding
+from fastapi import Request
 
 # Initialize Chroma client (local)
-client = chromadb.PersistentClient(path="./chroma_db")
 
-collection = client.get_or_create_collection(name="rag_documents")
+def add_documents(documents: list[Document], request: Request):
+    collection = request.app.state.collection
 
-
-def add_documents(documents: list[Document]):
-    """
-    Add cleaned and chunked docs to Chroma with embeddings
-    """
     for doc in documents:
         vector = get_embedding(doc.text)
 

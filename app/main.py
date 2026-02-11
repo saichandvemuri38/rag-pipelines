@@ -5,10 +5,15 @@ from app.ingestion.cleaner import clean_documents
 from app.ingestion.chunker import chunk_documents
 from app.retrieval.vector_store import add_documents
 from app.retrieval.embeddings import get_embedding
-from fastapi import Query
-from app.retrieval.vector_store import collection
+from fastapi import Query, Request
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
+import os
+from openai import OpenAI
+from dotenv import load_dotenv
+import chromadb
+load_dotenv()
+client = OpenAI(api_key=os.getenv("OPEN_API_KEY"))
 
 
 app = FastAPI(
@@ -19,13 +24,21 @@ app = FastAPI(
 
 app.include_router(router)
 
+
+@app.on_event("startup")
+def startup_event():
+    app.state.chroma_client = chromadb.PersistentClient(path="./chroma_db")
+    app.state.collection = app.state.chroma_client.get_or_create_collection(
+        name="rag_collection"
+    )
+
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
 
 @app.get("/ingest")
-def ingest_local_document():
-    collection.delete(collection.get()["ids"])
+def ingest_local_document(request: Request):
+    # collection.delete(collection.get()["ids"])
     # 1️⃣ Load
     docs = load_document("./data/test_rag.pdf")
 
@@ -36,18 +49,14 @@ def ingest_local_document():
     chunked = chunk_documents(cleaned, max_tokens=500, overlap=50)
 
     # 4️⃣ Embeddings + Chroma
-    add_documents(chunked)
+    add_documents(chunked, request)
 
     return {"status": "success", "chunks_added": len(chunked)}
-
-model_name = "tiiuae/falcon-7b-instruct"  # smaller, public
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModelForCausalLM.from_pretrained(model_name)
 
 @app.post("/query")
 def query_rag(q: str = Query(..., description="Question to search")):
     q_vector = get_embedding(q)
-    results = collection.query(
+    results = app.state.collection.query(
         query_embeddings=[q_vector],
         n_results=3
     )
@@ -56,17 +65,16 @@ def query_rag(q: str = Query(..., description="Question to search")):
     if not context.strip():
         context = "No relevant context found."
 
-    inputs = tokenizer(context, return_tensors="pt").to(model.device)
-    outputs = model.generate(
-        **inputs,
-        max_new_tokens=150,
-        do_sample=True,
+    response = client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": "Answer based on context only"},
+            {"role": "user", "content": f"Context: {context}\n\nQuestion: {q}"}
+        ],
+        max_tokens=150,
         temperature=0.7,
-        top_p=0.9,
-        top_k=50
     )
-    answer = tokenizer.decode(outputs[0], skip_special_tokens=True)
-
+    answer = response.choices[0].message.content.strip()
     return {"context": context, "answer": answer}
 
 # @app.post("/query")
