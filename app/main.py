@@ -38,9 +38,11 @@ def health_check():
 
 @app.get("/ingest")
 def ingest_local_document(request: Request):
-    # collection.delete(collection.get()["ids"])
+   
+    app.state.collection.delete(app.state.collection.get()["ids"])
+
     # 1️⃣ Load
-    docs = load_document("./data/test_rag.pdf")
+    docs = load_document("./data/Final_Draft.pdf")
 
     # 2️⃣ Clean
     cleaned = clean_documents(docs)
@@ -64,27 +66,36 @@ def query_rag(q: str = Query(..., description="Question to search")):
     context = "\n".join(docs) if docs else "No relevant context found."
     if not context.strip():
         context = "No relevant context found."
+    
+    context_prompt = f"""
+        You are a document question-answering system.
+
+        You must follow these rules strictly:
+        1. Use ONLY the information in the context.
+        2. Do not add external knowledge.
+        3. Do not infer beyond the text.
+        4. If the answer is not clearly stated, reply exactly:
+        "Not found in the provided context."
+
+        Context:
+        ----------------
+        {context}
+        ----------------
+
+        Question:
+        {q}
+
+        Provide a concise answer strictly based on the context.
+    """
 
     response = client.chat.completions.create(
-        model="gpt-3.5-turbo",
+        model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": "Answer based on context only"},
-            {"role": "user", "content": f"Context: {context}\n\nQuestion: {q}"}
+            {"role": "system", "content": "You are a strict document QA assistant. Answer strictly based on the context provided. If the answer is not in the context, say 'I cannot answer this question based on the provided context.' Do not use any external knowledge."},
+            {"role": "user", "content": context_prompt}
         ],
-        max_tokens=150,
-        temperature=0.7,
+        # max_tokens=300,
+        temperature=0,
     )
     answer = response.choices[0].message.content.strip()
     return {"context": context, "answer": answer}
-
-# @app.post("/query")
-# def query_rag(q: str = Query(..., description="Question to search")):
-#     q_vector = get_embedding(q)
-#     results = collection.query(
-#         query_embeddings=[q_vector],
-#         n_results=3
-#     )
-#     return results
-# if __name__ == "__main__":
-#     load_local_document()
-
